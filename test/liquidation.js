@@ -38,6 +38,7 @@ describe("Liquidation", function () {
 
     const expectedLiquidationEvents = liquidationReceipt.logs.filter(v => v.topics[3] === '0x00000000000000000000000059ce4a2ac5bc3f5f225439b2993b86b42f6d3e9f');
 
+    console.log("trx log: " + JSON.stringify(liquidationReceipt, null, 4))
     expect(expectedLiquidationEvents.length, "no expected liquidation").to.be.above(0);
     expect(liquidationEvents.length, "unexpected liquidation").to.be.equal(expectedLiquidationEvents.length);
 

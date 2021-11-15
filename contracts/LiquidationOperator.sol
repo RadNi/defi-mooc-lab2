@@ -8,7 +8,77 @@ import "hardhat/console.sol";
 // Aave
 // https://docs.aave.com/developers/the-core-protocol/lendingpool/ilendingpool
 
+library DataTypes {
+  // refer to the whitepaper, section 1.1 basic concepts for a formal description of these properties.
+  struct ReserveData {
+    //stores the reserve configuration
+    ReserveConfigurationMap configuration;
+    //the liquidity index. Expressed in ray
+    uint128 liquidityIndex;
+    //variable borrow index. Expressed in ray
+    uint128 variableBorrowIndex;
+    //the current supply rate. Expressed in ray
+    uint128 currentLiquidityRate;
+    //the current variable borrow rate. Expressed in ray
+    uint128 currentVariableBorrowRate;
+    //the current stable borrow rate. Expressed in ray
+    uint128 currentStableBorrowRate;
+    uint40 lastUpdateTimestamp;
+    //tokens addresses
+    address aTokenAddress;
+    address stableDebtTokenAddress;
+    address variableDebtTokenAddress;
+    //address of the interest rate strategy
+    address interestRateStrategyAddress;
+    //the id of the reserve. Represents the position in the list of the active reserves
+    uint8 id;
+  }
+
+  struct ReserveConfigurationMap {
+    //bit 0-15: LTV
+    //bit 16-31: Liq. threshold
+    //bit 32-47: Liq. bonus
+    //bit 48-55: Decimals
+    //bit 56: Reserve is active
+    //bit 57: reserve is frozen
+    //bit 58: borrowing is enabled
+    //bit 59: stable rate borrowing enabled
+    //bit 60-63: reserved
+    //bit 64-79: reserve factor
+    uint256 data;
+  }
+
+  struct UserConfigurationMap {
+    uint256 data;
+  }
+
+  enum InterestRateMode {NONE, STABLE, VARIABLE}
+}
+
+interface IUniswapV2Router02 {
+    function WETH () external returns (address);
+    function swapTokensForExactETH(uint amountOut, uint amountInMax, address[] calldata path, address to, uint deadline)
+        external
+        returns (uint[] memory amounts);
+    function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline)
+        external
+        returns (uint[] memory amounts);
+    function swapTokensForExactTokens(
+        uint amountOut,
+        uint amountInMax,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external returns (uint[] memory amounts);
+}
+
 interface ILendingPool {
+
+    function getUserConfiguration(address user)
+    external
+    view
+    returns (DataTypes.UserConfigurationMap memory);
+
     /**
      * Function to liquidate a non-healthy position collateral-wise, with Health Factor below 1
      * - The caller (liquidator) covers `debtToCover` amount of debt of the user getting liquidated, and receives
@@ -128,16 +198,44 @@ interface IUniswapV2Pair {
             uint112 reserve1,
             uint32 blockTimestampLast
         );
+    function token0() external view returns (address);
+    function token1() external view returns (address);
 }
 
 // ----------------------IMPLEMENTATION------------------------------
 
 contract LiquidationOperator is IUniswapV2Callee {
     uint8 public constant health_factor_decimals = 18;
+    ILendingPool aave = ILendingPool(0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9);
+    address target = 0x59CE4a2AC5bC3f5F225439B2993b86B42f6d3e9F;
+    IWETH WETH = IWETH (0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
+    IERC20 WBTC = IERC20 (0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599); // WBTC
+    IERC20 collateralAsset = WBTC;
+    IERC20 USDT = IERC20 (0xdAC17F958D2ee523a2206206994597C13D831ec7); //USDT
+    IERC20 debtAsset = USDT;
+    IUniswapV2Factory factory = IUniswapV2Factory (0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f);
+    IUniswapV2Pair uniPair = IUniswapV2Pair(factory.getPair(address(collateralAsset), address(debtAsset)));   // IUniswapV2Pair (0x0DE0Fa91b6DbaB8c8503aAA2D1DFa91a192cB149); // USDT <> WBTC
+    IUniswapV2Pair pair_WETH_USDT = IUniswapV2Pair (factory.getPair(address(WETH), address(USDT)));
+    IUniswapV2Pair uniPair2 = IUniswapV2Pair(factory.getPair(address(WBTC), address(WETH)));
+    IUniswapV2Router02 router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+
 
     // TODO: define constants used in the contract including ERC-20 tokens, Uniswap Pairs, Aave lending pools, etc. */
     //    *** Your code here ***
     // END TODO
+    event Log (
+           bytes );
+    
+    event UserStatus (
+            uint256 totalCollateralETH,
+            uint256 totalDebtETH,
+            uint256 availableBorrowsETH,
+            uint256 currentLiquidationThreshold,
+            uint256 ltv,
+            uint256 healthFactor);
+
+    event UserConf(
+            DataTypes.UserConfigurationMap );
 
     // some helper function, it is totally fine if you can finish the lab without using these function
     // https://github.com/Uniswap/v2-periphery/blob/master/contracts/libraries/UniswapV2Library.sol
@@ -186,9 +284,55 @@ contract LiquidationOperator is IUniswapV2Callee {
     // TODO: add a `receive` function so that you can withdraw your WETH
     //   *** Your code here ***
     // END TODO
+    receive() external payable {}
 
     // required by the testing script, entry for your liquidation call
     function operate() external {
+        uint256 totalCollateralETH;
+        uint256 totalDebtETH;
+        uint256 availableBorrowsETH;
+        uint256 currentLiquidationThreshold;
+        uint256 ltv;
+        uint256 healthFactor;
+        // uint256 decimal = 1000000000000000000;
+        bytes memory temp = "1";
+        (totalCollateralETH, totalDebtETH, availableBorrowsETH, currentLiquidationThreshold, ltv, healthFactor) = aave.getUserAccountData(target);
+        DataTypes.UserConfigurationMap memory conf = aave.getUserConfiguration (target);
+        // emit UserStatus(totalCollateralETH, totalDebtETH, availableBorrowsETH, currentLiquidationThreshold, ltv, healthFactor);
+        // emit UserConf(conf);
+
+        uint256 debtToCover = 2009163782216;
+
+        pair_WETH_USDT.swap(0, debtToCover, address(this), temp);
+        emit Log ("amad2");        
+        
+        uint256 balance = collateralAsset.balanceOf (address(this));
+
+        emit Log (abi.encodePacked(balance));
+
+        // WBTC.transfer (address(uniPair2), balance);
+        // WBTC.approve (address(router), 2**256 - 1);
+        address[] memory path = new address[](2);
+        path[0] = address(collateralAsset);
+        path[1] =  address(WETH);
+        console.log ("collat balance: %s", balance);
+        router.swapExactTokensForETH (balance, 0, path, msg.sender, 1621761058);
+
+        // (uint112 reserve0, uint112 reserve1, ) = uniPair2.getReserves(); 
+
+        // uint256 amountOut = getAmountOut (balance, reserve0, reserve1);
+        // uniPair2.swap(0, amountOut, address(this), "");
+   
+        uint256 balanceWETH = WETH.balanceOf (address(this));
+        // emit Log (abi.encodePacked(balanceWETH));
+        console.log("WETH balance: %s", balanceWETH);
+        
+        // IWETH uniWETH = IWETH(router.WETH () );
+        // console.log ("uni addr %s", address(uniWETH));
+        WETH.withdraw (balanceWETH);
+
+        payable(msg.sender).transfer (balanceWETH);
+ 
         // TODO: implement your liquidation logic
 
         // 0. security checks and initializing variables
@@ -217,6 +361,23 @@ contract LiquidationOperator is IUniswapV2Callee {
         uint256 amount1,
         bytes calldata
     ) external override {
+        emit Log ("amad");
+        
+        address token0 = IUniswapV2Pair(msg.sender).token0();
+        address token1 = IUniswapV2Pair(msg.sender).token1();
+        (uint112 reserve0, uint112 reserve1, ) = IUniswapV2Pair(msg.sender).getReserves();
+        debtAsset.approve(address(aave), 2**256-1);
+        aave.liquidationCall (address(collateralAsset), address(debtAsset), target, amount1, false);
+        uint256 amountIn = getAmountIn (amount1, reserve0, reserve1);
+        address[] memory path = new address[](2);
+        path[0] = address(WBTC);
+        path[1] = address(WETH);
+        WBTC.approve(address(router), 2**256-1);
+        console.log("here resETH: %s, resUSDT: %s, amETH: %s", reserve0, reserve1, amountIn);
+        router.swapTokensForExactTokens(amountIn, 2**256-1, path, msg.sender, 1621761058);
+        console.log("dear"); 
+        // bool res = collateralAsset.transfer (msg.sender, amountIn);
+
         // TODO: implement your liquidation logic
 
         // 2.0. security checks and initializing variables
@@ -234,3 +395,4 @@ contract LiquidationOperator is IUniswapV2Callee {
         // END TODO
     }
 }
+
