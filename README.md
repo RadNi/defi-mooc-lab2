@@ -23,9 +23,13 @@ function operate() external;
 You are expected to liquidate `0x59CE4a2AC5bC3f5F225439B2993b86B42f6d3e9F` on Aave V2 which was liquidated at block `12489620`. Check out the [original liquidation transaction](https://etherscan.io/tx/0xac7df37a43fab1b130318bbb761861b8357650db2e2c6493b73d6da3d9581077).
 
 ### Commands
-To test your contract:
+To test your contract using docker:
 1. `docker build -t defi-mooc-lab2 .`
 2. `docker run -e ALCHE_API="$YOUR ALCHEMY ETHEREUM MAINNET API" -it defi-mooc-lab2 npm test`
+
+To test your contract without docker:
+1. `export ALCHE_API="$YOUR ALCHEMY ETHEREUM MAINNET API"`
+2. `npm test`
 
 ### Grading
 
